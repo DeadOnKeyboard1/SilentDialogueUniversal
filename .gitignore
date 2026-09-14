@@ -1,0 +1,30 @@
+# Build output
+/build/
+/asset-build/
+/package/
+
+# Generated binaries and symbols
+*.dll
+*.exp
+*.ilk
+*.lib
+*.obj
+*.pdb
+
+# Local CMake and IDE state
+CMakeUserPresets.json
+.vs/
+.vscode/
+out/
+
+# Local/generated audio intermediates
+/tmp16khz.wav
+*.lip
+*.wav
+*.xwm
+*.fuz
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+desktop.ini
