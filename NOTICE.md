@@ -21,3 +21,21 @@ MinHook license and its copyright notices are preserved in
 The Elder Scrolls, Skyrim, Bethesda Game Studios, and Bethesda Softworks are
 trademarks or registered trademarks of their respective owners. This project
 is not affiliated with or endorsed by Bethesda.
+
+## CommonLibSSE-NG
+
+This project statically links against CommonLibSSE-NG 8.0.0.
+
+CommonLibSSE-NG is licensed under GPL-3.0-or-later with its Modding Exception
+and GPL-3.0 Linking Exception. The applicable exception text is preserved in
+licenses/CommonLibSSE-NG-EXCEPTIONS.md.
+
+CommonLibSSE-NG is derived from the original CommonLibSSE project.
+The original CommonLibSSE copyright and MIT license notice are preserved in
+licenses/CommonLibSSE-NG-ORIGINAL-MIT.txt.
+
+Original CommonLibSSE:
+Copyright (c) 2018 Ryan-rsm-McKenzie
+
+CommonLibSSE-NG:
+https://github.com/alandtse/CommonLibSSE-NG
