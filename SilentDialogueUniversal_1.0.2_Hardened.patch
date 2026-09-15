@@ -1,0 +1,471 @@
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/AUDIT_NOTES.md /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/AUDIT_NOTES.md
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/AUDIT_NOTES.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/AUDIT_NOTES.md	2026-09-15 15:52:20.464946916 +0000
+@@ -0,0 +1,19 @@
++# Silent Dialogue Universal 1.0.2 source audit
++
++This revision is an independent implementation based on the existing Silent Dialogue Universal source and public CommonLibSSE-NG interfaces. No source code from other silent-dialogue mods is included.
++
++## Voice-safety changes
++
++1. Voice resources are classified as present, missing, or unknown instead of using a simple true/false check.
++2. Existing exact resources are always preserved.
++3. Normal Skyrim voice paths are checked across the supported FUZ/XWM/WAV filename variants.
++4. Unknown/custom path formats are preserved rather than treated as missing.
++5. Dialogue responses with an explicit `voiceSound` descriptor are never replaced.
++6. The exact bundled `silence_N.fuz` resource is verified before modifying a response.
++7. Verbose logging records preservation decisions and actual substitutions.
++
++## Other observations
++
++- The subtitle force flag is only set when at least one response was actually substituted. It remains a runtime mutation of the associated topic-info form for the session; changing that behavior would require a separate subtitle-display hook and is intentionally not part of this safety revision.
++- Reading-time parsing and configuration bounds were reviewed; no blocking issue was found.
++- The constructor hook signature matches the CommonLibSSE-NG `DialogueItem` constructor wrapper used by this project.
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/Build-SilentDialogueUniversal.ps1 /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/Build-SilentDialogueUniversal.ps1
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/Build-SilentDialogueUniversal.ps1	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/Build-SilentDialogueUniversal.ps1	2026-09-15 15:51:24.437460670 +0000
+@@ -0,0 +1,218 @@
++﻿param(
++    [switch]$Clean,
++    [string]$VcpkgRoot = ""
++)
++
++$ErrorActionPreference = "Stop"
++Set-StrictMode -Version Latest
++
++function Step([string]$Text) {
++    Write-Host ""
++    Write-Host "==> $Text" -ForegroundColor Cyan
++}
++
++function Fail([string]$Text) {
++    Write-Host ""
++    Write-Host "ERROR: $Text" -ForegroundColor Red
++    exit 1
++}
++
++$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
++$BuildDir = Join-Path $Root "build-vs2022-sdu"
++$DistDir = Join-Path $Root "dist"
++$PluginDir = Join-Path $DistDir "SKSE\Plugins"
++$VoiceDir = Join-Path $DistDir "Sound\Voice\SilentDialogueUniversal"
++
++Push-Location $Root
++
++try {
++    Write-Host "SilentDialogueUniversal - VS2022 v143 build" -ForegroundColor Green
++    Write-Host "Project: $Root"
++
++    if (-not (Test-Path (Join-Path $Root "CMakeLists.txt"))) {
++        Fail "CMakeLists.txt was not found. Put this script in the SilentDialogueUniversal project root."
++    }
++
++    if (-not (Get-Command cmake.exe -ErrorAction SilentlyContinue)) {
++        Fail "cmake.exe was not found in PATH."
++    }
++
++    if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
++        Fail "git.exe was not found in PATH. It is required because CMake may fetch CommonLibSSE-NG and MinHook."
++    }
++
++    # vcpkg
++    if ($VcpkgRoot -and (Test-Path (Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"))) {
++        $env:VCPKG_ROOT = (Resolve-Path $VcpkgRoot).Path
++    }
++    elseif ($env:VCPKG_ROOT -and (Test-Path (Join-Path $env:VCPKG_ROOT "scripts\buildsystems\vcpkg.cmake"))) {
++        $env:VCPKG_ROOT = (Resolve-Path $env:VCPKG_ROOT).Path
++    }
++    elseif (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake") {
++        $env:VCPKG_ROOT = "C:\vcpkg"
++    }
++    else {
++        Fail 'vcpkg was not found. Run with -VcpkgRoot "C:\path\to\vcpkg".'
++    }
++
++    Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
++
++    # Visual Studio 2022 Build Tools
++    $StandardVS2022 = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
++    $VcVars = Join-Path $StandardVS2022 "VC\Auxiliary\Build\vcvarsall.bat"
++
++    if (-not (Test-Path $VcVars)) {
++        Fail @"
++The registered VS2022 Build Tools instance was not found here:
++  $StandardVS2022
++
++Open Visual Studio Installer -> Build Tools 2022 -> Modify
++and ensure 'Desktop development with C++' is installed.
++"@
++    }
++
++    $Cl = Get-ChildItem -Path (Join-Path $StandardVS2022 "VC\Tools\MSVC") `
++        -Recurse -File -Filter "cl.exe" -ErrorAction SilentlyContinue |
++        Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\cl\.exe$' } |
++        Sort-Object FullName -Descending |
++        Select-Object -First 1
++
++    if (-not $Cl) {
++        Fail "VS2022 Build Tools exists, but x64 cl.exe was not found."
++    }
++
++    $env:VCPKG_VISUAL_STUDIO_PATH = $StandardVS2022
++
++    Write-Host "Visual Studio 2022        : $StandardVS2022"
++    Write-Host "VCPKG_VISUAL_STUDIO_PATH : $env:VCPKG_VISUAL_STUDIO_PATH"
++    Write-Host "MSVC compiler             : $($Cl.FullName)"
++    Write-Host "vcpkg target triplet      : x64-windows-static-md"
++
++    if ($Clean -and (Test-Path $BuildDir)) {
++        Step "Removing previous build directory"
++        Remove-Item $BuildDir -Recurse -Force
++    }
++
++    Step "Configuring SilentDialogueUniversal"
++
++    $Toolchain = Join-Path $env:VCPKG_ROOT "scripts\buildsystems\vcpkg.cmake"
++
++    & cmake.exe `
++        -S $Root `
++        -B $BuildDir `
++        -G "Visual Studio 17 2022" `
++        -A x64 `
++        -T v143 `
++        "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" `
++        "-DVCPKG_TARGET_TRIPLET=x64-windows-static-md" `
++        "-DVCPKG_HOST_TRIPLET=x64-windows"
++
++    if ($LASTEXITCODE -ne 0) {
++        Write-Host ""
++        Write-Host "CMake configuration failed." -ForegroundColor Red
++
++        $ManifestLog = Join-Path $BuildDir "vcpkg-manifest-install.log"
++        if (Test-Path $ManifestLog) {
++            Write-Host ""
++            Write-Host "Last lines of vcpkg-manifest-install.log:" -ForegroundColor Yellow
++            Get-Content $ManifestLog -Tail 120
++        }
++
++        Fail "Configuration failed with exit code $LASTEXITCODE."
++    }
++
++    Step "Compiling SilentDialogueUniversal (RelWithDebInfo)"
++
++    & cmake.exe --build $BuildDir --config RelWithDebInfo --target SilentDialogueUniversal --parallel
++
++    if ($LASTEXITCODE -ne 0) {
++        Fail "Compilation failed with exit code $LASTEXITCODE."
++    }
++
++    Step "Locating SilentDialogueUniversal.dll"
++
++    $Dll = Get-ChildItem -Path $BuildDir -Recurse -File -Filter "SilentDialogueUniversal.dll" -ErrorAction SilentlyContinue |
++        Where-Object { $_.FullName -notmatch '\\vcpkg_installed\\' } |
++        Sort-Object LastWriteTime -Descending |
++        Select-Object -First 1
++
++    if (-not $Dll) {
++        Fail "Build finished, but SilentDialogueUniversal.dll was not found."
++    }
++
++    if (Test-Path $DistDir) {
++        Remove-Item $DistDir -Recurse -Force
++    }
++
++    New-Item -ItemType Directory -Path $PluginDir -Force | Out-Null
++    Copy-Item $Dll.FullName (Join-Path $PluginDir "SilentDialogueUniversal.dll") -Force
++
++    $Pdb = Get-ChildItem -Path $BuildDir -Recurse -File -Filter "SilentDialogueUniversal.pdb" -ErrorAction SilentlyContinue |
++        Where-Object { $_.FullName -notmatch '\\vcpkg_installed\\' } |
++        Sort-Object LastWriteTime -Descending |
++        Select-Object -First 1
++
++    if ($Pdb) {
++        Copy-Item $Pdb.FullName (Join-Path $PluginDir "SilentDialogueUniversal.pdb") -Force
++    }
++
++    # Copy the plugin INI if present.
++    $Ini = Join-Path $Root "config\SilentDialogueUniversal.ini"
++    if (Test-Path $Ini) {
++        Copy-Item $Ini (Join-Path $PluginDir "SilentDialogueUniversal.ini") -Force
++    }
++    else {
++        Write-Host "WARNING: config\SilentDialogueUniversal.ini was not found." -ForegroundColor Yellow
++    }
++
++    # Reuse the already generated silent FUZ assets if they exist in the source package.
++    $SourceVoiceDir = Join-Path $Root "package\Sound\Voice\SilentDialogueUniversal"
++    if (Test-Path $SourceVoiceDir) {
++        $FuzFiles = Get-ChildItem -Path $SourceVoiceDir -File -Filter "silence_*.fuz" -ErrorAction SilentlyContinue
++        if ($FuzFiles) {
++            New-Item -ItemType Directory -Path $VoiceDir -Force | Out-Null
++            Copy-Item (Join-Path $SourceVoiceDir "silence_*.fuz") $VoiceDir -Force
++            Write-Host "Silent FUZ assets copied: $($FuzFiles.Count)"
++        }
++        else {
++            Write-Host "WARNING: No silence_*.fuz files were found in package\Sound\Voice\SilentDialogueUniversal." -ForegroundColor Yellow
++        }
++    }
++    else {
++        Write-Host "WARNING: No package\Sound\Voice\SilentDialogueUniversal directory found." -ForegroundColor Yellow
++        Write-Host "The DLL build is valid, but the release also needs the generated silence_1.fuz ... silence_10.fuz assets." -ForegroundColor Yellow
++    }
++
++    $FinalDll = Join-Path $PluginDir "SilentDialogueUniversal.dll"
++    $Hash = (Get-FileHash $FinalDll -Algorithm SHA256).Hash
++    $SizeKB = [math]::Round((Get-Item $FinalDll).Length / 1KB, 1)
++
++    Write-Host ""
++    Write-Host "============================================================" -ForegroundColor Green
++    Write-Host " BUILD SUCCESSFUL" -ForegroundColor Green
++    Write-Host "============================================================" -ForegroundColor Green
++    Write-Host "DLL   : $FinalDll"
++    Write-Host "Size  : $SizeKB KB"
++    Write-Host "SHA256: $Hash"
++
++    if ($Pdb) {
++        Write-Host "PDB   : $(Join-Path $PluginDir 'SilentDialogueUniversal.pdb')"
++    }
++
++    if (Test-Path (Join-Path $PluginDir "SilentDialogueUniversal.ini")) {
++        Write-Host "INI   : $(Join-Path $PluginDir 'SilentDialogueUniversal.ini')"
++    }
++
++    Write-Host ""
++    Write-Host "MO2-ready output:" -ForegroundColor Cyan
++    Write-Host "  $DistDir"
++}
++catch {
++    Write-Host ""
++    Write-Host "BUILD FAILED" -ForegroundColor Red
++    Write-Host $_.Exception.Message -ForegroundColor Red
++    exit 1
++}
++finally {
++    Pop-Location
++}
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/CMakeLists.txt /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/CMakeLists.txt
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/CMakeLists.txt	2026-09-14 02:18:54.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/CMakeLists.txt	2026-09-15 15:51:24.906040533 +0000
+@@ -3,7 +3,7 @@
+ # Copyright (C) 2026 DeadOnKeyboard
+ # SPDX-License-Identifier: GPL-3.0-or-later
+ 
+-project(SilentDialogueUniversal VERSION 1.0.0 LANGUAGES C CXX)
++project(SilentDialogueUniversal VERSION 1.0.2 LANGUAGES C CXX)
+ 
+ include(FetchContent)
+ 
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/README.md /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/README.md
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/README.md	2026-09-14 02:18:54.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/README.md	2026-09-15 15:51:24.906126663 +0000
+@@ -9,6 +9,14 @@
+ The implementation was written independently and does not include code,
+ binaries, or voice assets from Fuz Ro D'oh.
+ 
++## 1.0.2 voice-safety changes
++
++- Preserves dialogue that uses an explicit custom sound descriptor.
++- Checks equivalent FUZ/XWM/WAV resources for ordinary Skyrim voice paths.
++- Uses conservative classification: unknown/custom path formats are preserved instead of being treated as unvoiced.
++- Verifies the exact bundled silent FUZ asset before changing a dialogue response.
++- Adds verbose diagnostics for preserved custom paths and actual substitutions.
++
+ ## Requirements
+ 
+ - A matching version of SKSE
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/src/DialogueHook.cpp /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/src/DialogueHook.cpp
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/src/DialogueHook.cpp	2026-09-14 02:15:40.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/src/DialogueHook.cpp	2026-09-15 15:51:24.905912169 +0000
+@@ -59,17 +59,50 @@
+ 			return false;
+ 		}
+ 
+-		bool VoiceExists(std::string_view a_basePath)
++		enum class VoiceAssetState
+ 		{
+-			if (a_basePath.empty()) {
+-				return false;
+-			}
+-			if (EndsWithInsensitive(a_basePath, ".fuz") ||
+-				EndsWithInsensitive(a_basePath, ".xwm") ||
+-				EndsWithInsensitive(a_basePath, ".wav")) {
+-				return ResourceExists(a_basePath);
++			kPresent,
++			kMissing,
++			kUnknown
++		};
++
++		std::string NormalizeResourcePath(std::string_view a_path)
++		{
++			std::string normalized{ a_path };
++			std::ranges::replace(normalized, '/', '\\');
++			while (normalized.starts_with(".\\")) {
++				normalized.erase(0, 2);
+ 			}
++			return normalized;
++		}
++
++		bool IsStandardVoicePath(std::string_view a_path)
++		{
++			auto startsWithInsensitive = [](std::string_view a_value, std::string_view a_prefix) {
++				if (a_value.size() < a_prefix.size()) {
++					return false;
++				}
++				return std::ranges::equal(
++					a_value.substr(0, a_prefix.size()),
++					a_prefix,
++					[](unsigned char a_left, unsigned char a_right) {
++						return std::tolower(a_left) == std::tolower(a_right);
++					});
++			};
++
++			return startsWithInsensitive(a_path, "Data\\Sound\\Voice\\") ||
++			       startsWithInsensitive(a_path, "Sound\\Voice\\");
++		}
++
++		bool HasKnownVoiceExtension(std::string_view a_path)
++		{
++			return EndsWithInsensitive(a_path, ".fuz") ||
++			       EndsWithInsensitive(a_path, ".xwm") ||
++			       EndsWithInsensitive(a_path, ".wav");
++		}
+ 
++		bool AnyKnownVoiceVariantExists(std::string_view a_basePath)
++		{
+ 			for (const auto extension : { ".fuz"sv, ".xwm"sv, ".wav"sv }) {
+ 				std::string candidate{ a_basePath };
+ 				candidate += extension;
+@@ -80,6 +113,40 @@
+ 			return false;
+ 		}
+ 
++		VoiceAssetState ClassifyVoiceAsset(std::string_view a_voicePath)
++		{
++			if (a_voicePath.empty()) {
++				return VoiceAssetState::kMissing;
++			}
++
++			const auto normalized = NormalizeResourcePath(a_voicePath);
++
++			// Prefer preservation over substitution. If the exact resource exists,
++			// it is always considered valid regardless of its naming convention.
++			if (ResourceExists(normalized)) {
++				return VoiceAssetState::kPresent;
++			}
++
++			if (HasKnownVoiceExtension(normalized)) {
++				auto basePath = normalized;
++				basePath.resize(basePath.size() - 4);
++				if (AnyKnownVoiceVariantExists(basePath)) {
++					return VoiceAssetState::kPresent;
++				}
++
++				// Only a normal Skyrim voice path is safe to classify as missing.
++				return IsStandardVoicePath(normalized) ? VoiceAssetState::kMissing : VoiceAssetState::kUnknown;
++			}
++
++			if (IsStandardVoicePath(normalized)) {
++				return AnyKnownVoiceVariantExists(normalized) ? VoiceAssetState::kPresent : VoiceAssetState::kMissing;
++			}
++
++			// Unknown/custom path format: do not touch it. A false negative here
++			// could silence a valid custom audio source.
++			return VoiceAssetState::kUnknown;
++		}
++
+ 		std::uint32_t DecodeUtf8(std::string_view a_text, std::size_t& a_index)
+ 		{
+ 			const auto first = static_cast<unsigned char>(a_text[a_index++]);
+@@ -188,27 +255,60 @@
+ 				if (!response || !response->text.c_str()) {
+ 					continue;
+ 				}
++
+ 				const std::string_view text{ response->text.c_str() };
+ 				const auto duration = SelectDuration(text);
++				if (duration == 0) {
++					continue;
++				}
++
++				// A sound descriptor is an explicit audio source. Never replace it,
++				// even if the ordinary voice-file path is empty or cannot be resolved.
++				if (response->voiceSound != nullptr) {
++					if (GetSettings().verboseLogging) {
++						SKSE::log::debug("Preserved dialogue with custom voice sound descriptor: {}", text);
++					}
++					continue;
++				}
++
+ 				const auto* voicePath = response->voice.c_str();
+-				if (duration == 0 || (voicePath && VoiceExists(voicePath))) {
++				const std::string_view voicePathView = voicePath ? std::string_view{ voicePath } : std::string_view{};
++				const auto voiceState = ClassifyVoiceAsset(voicePathView);
++
++				if (voiceState == VoiceAssetState::kPresent) {
++					continue;
++				}
++				if (voiceState == VoiceAssetState::kUnknown) {
++					if (GetSettings().verboseLogging) {
++						SKSE::log::debug("Preserved dialogue with unrecognized voice path '{}': {}", voicePathView, text);
++					}
+ 					continue;
+ 				}
+ 
+-				std::string replacement{ kSilentVoiceDirectory };
+-				replacement += "silence_";
+-				replacement += std::to_string(duration);
+-				if (!VoiceExists(replacement)) {
+-					SKSE::log::error("Silent voice resource is missing: {}.fuz", replacement);
++				std::string replacementBase{ kSilentVoiceDirectory };
++				replacementBase += "silence_";
++				replacementBase += std::to_string(duration);
++
++				// The release ships FUZ assets. Verify the exact asset before changing
++				// the dialogue response so a damaged/incomplete installation cannot
++				// turn dialogue silent by pointing at a nonexistent replacement.
++				std::string replacementAsset{ replacementBase };
++				replacementAsset += ".fuz";
++				if (!ResourceExists(replacementAsset)) {
++					SKSE::log::error("Silent voice resource is missing: {}", replacementAsset);
+ 					continue;
+ 				}
+ 
+-				response->voice = replacement.c_str();
++				response->voice = replacementBase.c_str();
+ 				response->soundLip = true;
+ 				replacedAny = true;
+ 
+ 				if (GetSettings().verboseLogging) {
+-					SKSE::log::debug("Substituted {} second silent voice for: {}", duration, text);
++					SKSE::log::debug(
++						"Substituted {} second silent voice; missing original path='{}'; text='{}'",
++						duration,
++						voicePathView,
++						text);
+ 				}
+ 			}
+ 
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/src/main.cpp /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/src/main.cpp
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/src/main.cpp	2026-09-14 02:15:36.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/src/main.cpp	2026-09-15 15:51:24.906087704 +0000
+@@ -31,7 +31,7 @@
+ 	InitializeLogging();
+ 
+ 	const auto runtime = REL::Module::get().version();
+-	SKSE::log::info("Silent Dialogue Universal 1.0.0 loading for Skyrim {}", runtime.string());
++	SKSE::log::info("Silent Dialogue Universal 1.0.2 loading for Skyrim {}", runtime.string());
+ 	SKSE::log::info("Detected runtime family: {}", REL::Module::IsSE() ? "SE" : "AE");
+ 
+ 	SilentDialogue::LoadSettings();
+diff -ruN '--exclude=build' '--exclude=package' '--exclude=asset-build' '--exclude=.git' '--exclude=tmp16khz.wav' /mnt/data/sdu_audit/SilentDialogueUniversal/vcpkg.json /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/vcpkg.json
+--- /mnt/data/sdu_audit/SilentDialogueUniversal/vcpkg.json	2026-09-14 02:18:56.000000000 +0000
++++ /mnt/data/SilentDialogueUniversal_1.0.2_Hardened_Source/vcpkg.json	2026-09-15 15:52:20.464686943 +0000
+@@ -1,7 +1,7 @@
+ {
+   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+   "name": "silent-dialogue-universal",
+-  "version-semver": "1.0.0",
++  "version-semver": "1.0.2",
+   "description": "A universal silent-dialogue SKSE plugin for Skyrim SE and AE.",
+   "license": "GPL-3.0-or-later",
+   "supports": "windows & x64",
